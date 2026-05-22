@@ -24,11 +24,12 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-SEED_FILE = Path("data/clinics_seed.json")
+SEED_FILE  = Path("data/clinics_seed.json")
+# CACHE_DIR 优先使用环境变量指定的持久磁盘路径（Render），否则使用本地
+CACHE_DIR  = Path(os.getenv("CACHE_DIR", "data/cache"))
 
-# 内存缓存：key = region，value = 机构列表
-# 服务运行期间持久，重启后首次访问时自动重新抓取
-_cache: Dict[str, List[Dict]] = {}
+# 内存缓存：作为文件缓存的二级加速
+_mem_cache: Dict[str, List[Dict]] = {}
 
 
 def load_seed_data() -> List[Dict]:
@@ -36,6 +37,32 @@ def load_seed_data() -> List[Dict]:
         with open(SEED_FILE, encoding="utf-8") as f:
             return json.load(f)
     return []
+
+
+def _cache_path(region: str) -> Path:
+    return CACHE_DIR / f"{region}.json"
+
+
+def _read_cache(region: str) -> Optional[List[Dict]]:
+    if region in _mem_cache:
+        return _mem_cache[region]
+    path = _cache_path(region)
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        _mem_cache[region] = data
+        return data
+    return None
+
+
+def _write_cache(region: str, data: List[Dict]) -> None:
+    _mem_cache[region] = data
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_cache_path(region), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except OSError:
+        pass  # 磁盘不可写时仅保留内存缓存
 
 
 def filter_clinics(clinics: List[Dict], region: str, category: str) -> List[Dict]:
@@ -69,13 +96,16 @@ async def get_clinics(
             all_regions = ["gangnam", "hongdae", "myeongdong", "busan", "jeju"]
             all_clinics: List[Dict] = []
             for r in all_regions:
-                if r in _cache:
-                    all_clinics.extend(_cache[r])
+                cached = _read_cache(r)
+                if cached:
+                    all_clinics.extend(cached)
             clinics = filter_clinics(all_clinics, region, category)
         else:
-            if region not in _cache:
-                _cache[region] = await fetch_from_naver(region)
-            clinics = filter_clinics(_cache[region], region, category)
+            cached = _read_cache(region)
+            if cached is None:
+                cached = await fetch_from_naver(region)
+                _write_cache(region, cached)
+            clinics = filter_clinics(cached, region, category)
         source = "naver_api"
     else:
         clinics = filter_clinics(load_seed_data(), region, category)
