@@ -15,23 +15,17 @@ REGION_CONFIG = {
     "gangnam":    (["강남", "압구정", "청담", "역삼", "신사"], "首尔·江南"),
     "hongdae":    (["홍대", "신촌", "합정", "마포"],           "首尔·弘大"),
     "myeongdong": (["명동", "중구", "을지로"],                  "首尔·明洞"),
-    "busan":      (["부산 서면", "부산 해운대", "부산 남포"],    "釜山"),
-    "jeju":       (["제주시", "서귀포", "제주도"],              "济州岛"),
 }
 
-# 搜索关键词：覆盖科室 + 热门手术项目
-SEARCH_KEYWORDS = [
-    "성형외과", "피부과", "치과",
-    "쌍꺼풀", "코성형", "윤곽수술",
-    "보톡스", "필러", "레이저",
-    "지방흡입", "리프팅", "피부관리",
-]
+# 分类专属搜索词：按科室定向搜索
+CATEGORY_KEYWORDS: Dict[str, List[str]] = {
+    "整形外科": ["성형외과", "쌍꺼풀", "코성형", "윤곽수술", "지방흡입"],
+    "皮肤科":   ["피부과", "보톡스", "필러", "레이저", "리프팅", "피부관리"],
+}
 
 CATEGORY_MAP = {
     "성형외과": "整形外科",
     "피부과":   "皮肤科",
-    "치과":     "牙科美容",
-    "한의원":   "韩方医院",
 }
 
 TAG_MAP = {
@@ -107,7 +101,7 @@ async def _fetch_blog_count(
             return 0
 
 
-async def fetch_from_naver(region: str) -> List[Dict]:
+async def fetch_from_naver(region: str, category: str) -> List[Dict]:
     client_id     = os.getenv("NAVER_CLIENT_ID", "")
     client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
 
@@ -115,14 +109,15 @@ async def fetch_from_naver(region: str) -> List[Dict]:
         return []
 
     prefixes, region_zh = REGION_CONFIG.get(region, REGION_CONFIG["gangnam"])
+    keywords = CATEGORY_KEYWORDS.get(category, [])
     headers = {
         "X-Naver-Client-Id": client_id,
         "X-Naver-Client-Secret": client_secret,
     }
 
     async with httpx.AsyncClient(timeout=15) as client:
-        # 1. 所有前缀 × 所有关键词 并发查询（最多5个同时）
-        queries = [f"{p} {kw}" for p in prefixes for kw in SEARCH_KEYWORDS]
+        # 1. 所有前缀 × 分类关键词 并发查询（最多5个同时）
+        queries = [f"{p} {kw}" for p in prefixes for kw in keywords]
         local_sem = asyncio.Semaphore(5)
         results = await asyncio.gather(
             *[_fetch_local(client, headers, q, local_sem) for q in queries]

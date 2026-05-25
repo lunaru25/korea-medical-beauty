@@ -16,7 +16,9 @@ load_dotenv()
 
 app = FastAPI(title="韩国医美机构评分排行")
 
-ALL_REGIONS = ["gangnam", "hongdae", "myeongdong", "busan", "jeju"]
+ALL_REGIONS     = ["gangnam", "hongdae", "myeongdong"]
+ALL_CATEGORIES  = ["整形外科", "皮肤科"]
+_CATEGORY_KEY   = {"整形外科": "plastic", "皮肤科": "skin"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,15 +32,16 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.on_event("startup")
 async def warmup_cache():
-    """启动时逐个预热地区缓存，避免并发触发 Naver 限速。"""
+    """启动时逐个预热地区×分类缓存，避免并发触发 Naver 限速。"""
     if not has_naver_key():
         return
     async def _do_warmup():
         for region in ALL_REGIONS:
-            if _read_cache(region) is None:
-                data = await fetch_from_naver(region)
-                _write_cache(region, data)
-                await asyncio.sleep(2)  # 地区之间留间隔
+            for category in ALL_CATEGORIES:
+                if _read_cache(region, category) is None:
+                    data = await fetch_from_naver(region, category)
+                    _write_cache(region, category, data)
+                    await asyncio.sleep(2)
     asyncio.ensure_future(_do_warmup())
 
 SEED_FILE  = Path("data/clinics_seed.json")
@@ -56,27 +59,33 @@ def load_seed_data() -> List[Dict]:
     return []
 
 
-def _cache_path(region: str) -> Path:
-    return CACHE_DIR / f"{region}.json"
+def _cache_path(region: str, category: str) -> Path:
+    return CACHE_DIR / f"{region}_{_CATEGORY_KEY[category]}.json"
 
 
-def _read_cache(region: str) -> Optional[List[Dict]]:
-    if region in _mem_cache:
-        return _mem_cache[region]
-    path = _cache_path(region)
+def _mem_key(region: str, category: str) -> str:
+    return f"{region}_{category}"
+
+
+def _read_cache(region: str, category: str) -> Optional[List[Dict]]:
+    key = _mem_key(region, category)
+    if key in _mem_cache:
+        return _mem_cache[key]
+    path = _cache_path(region, category)
     if path.exists():
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        _mem_cache[region] = data
+        _mem_cache[key] = data
         return data
     return None
 
 
-def _write_cache(region: str, data: List[Dict]) -> None:
-    _mem_cache[region] = data
+def _write_cache(region: str, category: str, data: List[Dict]) -> None:
+    key = _mem_key(region, category)
+    _mem_cache[key] = data
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_cache_path(region), "w", encoding="utf-8") as f:
+        with open(_cache_path(region, category), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
     except OSError:
         pass  # 磁盘不可写时仅保留内存缓存
@@ -109,20 +118,21 @@ async def get_clinics(
     q: Optional[str] = Query(None),
 ):
     if has_naver_key():
-        if region == "all":
-            all_regions = ALL_REGIONS
-            all_clinics: List[Dict] = []
-            for r in all_regions:
-                cached = _read_cache(r)
-                if cached:
-                    all_clinics.extend(cached)
-            clinics = filter_clinics(all_clinics, region, category)
-        else:
-            cached = _read_cache(region)
-            if cached is None:
-                cached = await fetch_from_naver(region)
-                _write_cache(region, cached)
-            clinics = filter_clinics(cached, region, category)
+        regions_to_load = ALL_REGIONS if region == "all" else [region]
+        cats_to_load    = ALL_CATEGORIES if category == "all" else [category]
+
+        seen: Dict[str, Dict] = {}
+        for r in regions_to_load:
+            for c in cats_to_load:
+                cached = _read_cache(r, c)
+                if cached is None:
+                    cached = await fetch_from_naver(r, c)
+                    _write_cache(r, c, cached)
+                for clinic in cached:
+                    name_ko = clinic.get("name_ko", "")
+                    if name_ko not in seen:
+                        seen[name_ko] = clinic
+        clinics = list(seen.values())
         source = "naver_api"
     else:
         clinics = filter_clinics(load_seed_data(), region, category)
@@ -157,8 +167,6 @@ async def get_regions():
             {"code": "gangnam",    "name": "首尔·江南"},
             {"code": "hongdae",    "name": "首尔·弘大"},
             {"code": "myeongdong", "name": "首尔·明洞"},
-            {"code": "busan",      "name": "釜山"},
-            {"code": "jeju",       "name": "济州岛"},
         ]
     }
 
@@ -170,6 +178,5 @@ async def get_categories():
             {"code": "all",    "name": "全部分类"},
             {"code": "整形外科", "name": "整形外科"},
             {"code": "皮肤科",  "name": "皮肤科"},
-            {"code": "牙科美容", "name": "牙科美容"},
         ]
     }
