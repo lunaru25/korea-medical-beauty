@@ -123,11 +123,14 @@ async def fetch_from_naver(region: str, category: str) -> List[Dict]:
             *[_fetch_local(client, headers, q, local_sem) for q in queries]
         )
 
-        # 2. 合并，按机构名去重
+        # 2. 合并，按机构名去重，过滤牙科诊所
         seen: Dict[str, dict] = {}
         for items in results:
             for item in items:
                 name = _strip_html(item["title"])
+                raw_cat = item.get("category", "")
+                if "치과" in name or "치과" in raw_cat:
+                    continue
                 if name not in seen:
                     seen[name] = item
 
@@ -152,7 +155,7 @@ async def fetch_from_naver(region: str, category: str) -> List[Dict]:
             "id":           f"naver_{region}_{i}",
             "name_ko":      names_ko[i],
             "name_zh":      names_zh[i],
-            "category":     _detect_category(item.get("category", "")),
+            "category":     category,
             "region":       region,
             "region_zh":    region_zh,
             "address_ko":   addrs_ko[i],
