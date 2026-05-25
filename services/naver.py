@@ -40,9 +40,27 @@ TAG_MAP = {
     "여드름": "祛痘", "미백": "美白", "피부관리": "皮肤管理",
 }
 
+# Naver category 字段中出现这些词 → 非医疗机构，过滤掉
+NON_MEDICAL_CATEGORIES = {
+    "마사지", "스파", "안마", "피부관리실", "미용실",
+    "네일", "왁싱", "아로마", "사우나", "한증",
+    "헬스클럽", "휘트니스",
+}
+
 
 def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text)
+
+
+def _is_non_medical(item: dict) -> bool:
+    raw_cat = item.get("category", "")
+    name    = _strip_html(item.get("title", ""))
+    if any(t in raw_cat for t in NON_MEDICAL_CATEGORIES):
+        return True
+    # 名称里直接含按摩/안마也过滤
+    if "마사지" in name or "안마" in name:
+        return True
+    return False
 
 
 def _detect_category(raw: str) -> str:
@@ -140,13 +158,15 @@ async def fetch_from_naver(region: str, category: str) -> List[Dict]:
             *[_fetch_local(client, headers, q, local_sem) for q in queries]
         )
 
-        # 2. 合并，按机构名去重，过滤牙科诊所
+        # 2. 合并，按机构名去重，过滤牙科及非医疗机构
         seen: Dict[str, dict] = {}
         for items in results:
             for item in items:
                 name = _strip_html(item["title"])
                 raw_cat = item.get("category", "")
                 if "치과" in name or "치과" in raw_cat:
+                    continue
+                if _is_non_medical(item):
                     continue
                 if name not in seen:
                     seen[name] = item
