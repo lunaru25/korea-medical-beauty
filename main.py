@@ -30,14 +30,16 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.on_event("startup")
 async def warmup_cache():
-    """启动时后台预热所有地区缓存，保证结果稳定。"""
+    """启动时逐个预热地区缓存，避免并发触发 Naver 限速。"""
     if not has_naver_key():
         return
-    async def _warm(region: str):
-        if _read_cache(region) is None:
-            data = await fetch_from_naver(region)
-            _write_cache(region, data)
-    await asyncio.gather(*[_warm(r) for r in ALL_REGIONS])
+    async def _do_warmup():
+        for region in ALL_REGIONS:
+            if _read_cache(region) is None:
+                data = await fetch_from_naver(region)
+                _write_cache(region, data)
+                await asyncio.sleep(2)  # 地区之间留间隔
+    asyncio.ensure_future(_do_warmup())
 
 SEED_FILE  = Path("data/clinics_seed.json")
 # CACHE_DIR 优先使用环境变量指定的持久磁盘路径（Render），否则使用本地
