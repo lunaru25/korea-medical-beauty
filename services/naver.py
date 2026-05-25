@@ -97,13 +97,23 @@ async def _fetch_blog_count(
 ) -> int:
     async with sem:
         try:
+            # 先搜精确词；若返回0则回退到宽泛搜索，避免小诊所全为0
             resp = await client.get(
                 BLOG_API_URL,
                 params={"query": f"{name} {category_ko} 후기", "display": 1},
                 headers=headers,
                 timeout=10,
             )
-            return resp.json().get("total", 0)
+            count = resp.json().get("total", 0)
+            if count == 0:
+                resp2 = await client.get(
+                    BLOG_API_URL,
+                    params={"query": f"{name} 후기", "display": 1},
+                    headers=headers,
+                    timeout=10,
+                )
+                count = resp2.json().get("total", 0)
+            return count
         except Exception:
             return 0
 
