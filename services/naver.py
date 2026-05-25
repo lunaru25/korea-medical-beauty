@@ -28,6 +28,12 @@ CATEGORY_MAP = {
     "피부과":   "皮肤科",
 }
 
+# 博客搜索时加上科室词，避免统计无关帖子
+CATEGORY_KO = {
+    "整形外科": "성형외과",
+    "皮肤科":   "피부과",
+}
+
 TAG_MAP = {
     "쌍꺼풀": "双眼皮", "코": "隆鼻", "윤곽": "轮廓", "지방흡입": "脂肪吸脂",
     "보톡스": "肉毒素", "필러": "填充", "리프팅": "提拉", "레이저": "激光",
@@ -86,13 +92,14 @@ async def _fetch_blog_count(
     client: httpx.AsyncClient,
     headers: dict,
     name: str,
+    category_ko: str,
     sem: asyncio.Semaphore,
 ) -> int:
     async with sem:
         try:
             resp = await client.get(
                 BLOG_API_URL,
-                params={"query": f"{name} 후기", "display": 1},
+                params={"query": f"{name} {category_ko} 후기", "display": 1},
                 headers=headers,
                 timeout=10,
             )
@@ -138,9 +145,10 @@ async def fetch_from_naver(region: str, category: str) -> List[Dict]:
 
         # 3. 限速并发获取博客后记数量（最多5个同时请求，避免触发限速）
         names_ko = [_strip_html(item["title"]) for item in unique_items]
+        category_ko = CATEGORY_KO.get(category, "후기")
         sem = asyncio.Semaphore(5)
         blog_counts = await asyncio.gather(
-            *[_fetch_blog_count(client, headers, name, sem) for name in names_ko]
+            *[_fetch_blog_count(client, headers, name, category_ko, sem) for name in names_ko]
         )
 
     # 4. 在结果集内归一化评分（无门槛过滤，全部显示）
