@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,8 @@ load_dotenv()
 
 app = FastAPI(title="韩国医美机构评分排行")
 
+ALL_REGIONS = ["gangnam", "hongdae", "myeongdong", "busan", "jeju"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,6 +26,18 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.on_event("startup")
+async def warmup_cache():
+    """启动时后台预热所有地区缓存，保证结果稳定。"""
+    if not has_naver_key():
+        return
+    async def _warm(region: str):
+        if _read_cache(region) is None:
+            data = await fetch_from_naver(region)
+            _write_cache(region, data)
+    await asyncio.gather(*[_warm(r) for r in ALL_REGIONS])
 
 SEED_FILE  = Path("data/clinics_seed.json")
 # CACHE_DIR 优先使用环境变量指定的持久磁盘路径（Render），否则使用本地
@@ -93,7 +108,7 @@ async def get_clinics(
 ):
     if has_naver_key():
         if region == "all":
-            all_regions = ["gangnam", "hongdae", "myeongdong", "busan", "jeju"]
+            all_regions = ALL_REGIONS
             all_clinics: List[Dict] = []
             for r in all_regions:
                 cached = _read_cache(r)
